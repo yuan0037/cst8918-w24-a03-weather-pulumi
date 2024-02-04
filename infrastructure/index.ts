@@ -64,27 +64,43 @@ const image = new docker.Image(`${prefixName}-image`, {
   })
 
 
-  const redisInstance = new cache.Redis("myRedisInstance", {
+  // const redisInstance = new cache.Redis("myRedisInstance", {
+  //   resourceGroupName: resourceGroup.name,
+  //   sku: {
+  //       family: "C",
+  //       name: "Basic",
+  //       capacity: 1,
+  //   },
+  //   enableNonSslPort: false,
+  // });
+
+  const redis = new cache.Redis(`${prefixName}-redis`, {
+    name: `${prefixName}-weather-cache`,
+    location: 'westus3',
     resourceGroupName: resourceGroup.name,
-    sku: {
-        family: "C",
-        name: "Basic",
-        capacity: 1,
+    enableNonSslPort: true,
+    redisVersion: 'Latest',
+    minimumTlsVersion: '1.2',
+    redisConfiguration: {
+      maxmemoryPolicy: 'allkeys-lru'
     },
-    enableNonSslPort: false,
-  });
+    sku: {
+      name: 'Basic',
+      family: 'C',
+      capacity: 0
+    }
+  })
 
-  // Export the Redis Cache host name
-  export const redisHost = redisInstance.hostName.apply(hostname => hostname)
+// Extract the auth creds from the deployed Redis service
+const redisAccessKey = cache
+  .listRedisKeysOutput({ name: redis.name, resourceGroupName: resourceGroup.name })
+  .apply(keys => keys.primaryKey)
 
-// Retrieve and export the primary access key
-const redisKeys = pulumi.all([resourceGroup.name, redisInstance.name]).apply(([rgName, cacheName]) => 
-    cache.listRedisKeys({
-        resourceGroupName: rgName,
-        name: cacheName,
-    }));
+// Construct the Redis connection string to be passed as an environment variable in the app container
+const redisConnectionString = pulumi.interpolate`rediss://:${redisAccessKey}@${redis.hostName}:${redis.sslPort}`
 
-export const redisKey = redisKeys.primaryKey;
+
+
 
 
 
@@ -122,12 +138,8 @@ const containerGroup = new containerinstance.ContainerGroup(
               value: weatherKey              
             },
             {
-              name: 'REDIS_HOST', 
-              value: redisHost
-            },
-            {
-              name: 'REDIS_KEY',
-              value: redisKey
+              name: 'REDIS_URL',
+              value: redisConnectionString
             }
           ],
           resources: {
